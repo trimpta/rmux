@@ -1,5 +1,7 @@
 # rmux
 
+**vibe coded slop**
+
 **tmux for Instagram Reels.** Watch reels in a real browser window; when a reel is semi-interesting but you can't be bothered to sit through it, click **Fork** — a new window opens playing that reel from the start, tiled beside the current one, while your original window moves on. Each window is a full, independent session: scroll, fork again, close whenever. No merge, no rejoin.
 
 ## Requirements
