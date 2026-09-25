@@ -1,0 +1,22 @@
+{
+  "name": "rmux",
+  "version": "0.1.0",
+  "private": true,
+  "description": "tmux for Instagram Reels — fork any reel into a tiled, independent background window",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test test/tiler.test.js test/inject.test.js",
+    "smoke": "node test/lifecycle.smoke.js",
+    "probe": "node tools/probe.mjs",
+    "install-browser": "npx @puppeteer/browsers install chrome@stable --path ./browsers"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@puppeteer/browsers": "^3.2.3",
+    "puppeteer-core": "^25.12.0"
+  }
+}
