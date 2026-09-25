@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Product** | rmux — a "reels multiplexer" for Instagram |
-| **Version** | v1.1 — persistent login, no auto-advance |
+| **Version** | v1.2 — chromeless app-mode windows + sound on by default (building on v1.1: persistent login, no auto-advance) |
 | **Date** | 2025-09-25 |
 | **Status** | MVP built & field-verified (2025-09-25) |
 | **Platform** | Windows 10/11, single monitor — tiling verified at 150% display scaling |
@@ -15,7 +15,7 @@
 
 **rmux** is a tool that turns watching Instagram Reels into a multiplexed, parallel experience — like tmux, but for short-form video.
 
-You watch reels in a real browser window. When a reel is *semi-interesting* but you don't have the patience to sit through it, you click **Fork**. rmux opens a new real browser window playing that exact reel from the start, while your original window stays exactly where it was. Each window is a fully independent session — it can scroll, fork further, and be closed at will. Windows tile themselves on screen according to a priority rule that always gives the oldest windows the best space.
+You watch reels in a real, **chromeless** browser window (Chrome app mode: no tabs, no URL bar). When a reel is *semi-interesting* but you don't have the patience to sit through it, you click **Fork**. rmux opens a new chromeless window playing that exact reel from the start, while your original window stays exactly where it was. Each window is a fully independent session — it can scroll, fork further, and be closed at will. Windows tile themselves on screen according to a priority rule that always gives the oldest windows the best space.
 
 Everything else — liking, commenting, scrolling comments, sound, autoplay — is **native Instagram** in a **real browser**. rmux adds exactly one thing to the page: a small "Fork" button.
 
@@ -54,7 +54,7 @@ The itch being scratched: **curiosity without patience**. Reels are linear, unsk
 ### 4.1 First launch & login
 
 1. User runs `npm start` in a terminal.
-2. rmux launches **headful Chrome for Testing** (downloaded to `./browsers/` via `npm run install-browser`) with a **persistent profile** at `./profile/` (gitignored) — the login survives restarts. `npm start -- --fresh` wipes it.
+2. rmux launches **headful Chrome for Testing** (downloaded to `./browsers/` via `npm run install-browser`) in **app mode** — window 0 is **chromeless** (no tab strip, no URL bar) — with a **persistent profile** at `./profile/` (gitignored) — the login survives restarts. `npm start -- --fresh` wipes it.
 3. Window 0 opens **maximized** at `https://www.instagram.com/reels/`.
 4. The user logs in manually — once: the login lives in the persistent profile. rmux does **not** automate login; whatever Instagram throws (password, 2FA, CAPTCHA) is the user's to handle.
 5. All windows share **one browser context**, so one login covers every window.
@@ -64,11 +64,11 @@ The itch being scratched: **curiosity without patience**. Reels are linear, unsk
 1. On any reel page, a small **"Fork" button** floats at the bottom-left corner (hyperlink-preview style, like browsers show link URLs).
 2. Clicking Fork:
    - Reads the current URL (`location.href` — verified live: the playing reel's URL is `instagram.com/reels/<shortcode>/`).
-   - Opens a **new real browser window** at that URL. The reel plays from the start.
+   - Opens a **new chromeless app window** at that URL. The reel plays from the start.
    - **Focus stays on the source window** (the new window is created, tiled, then the source is brought back to front).
    - The source window **stays exactly where it was** — no auto-advance (v1.1, field feedback: jumping the feed under the user was confusing).
 3. The new window is itself a full session: it has its own Fork button, its own scroll-to-next-reel behavior, and can fork further. It is "a new window 0" of its own subtree.
-4. Native interactions in every window: scroll, like, comment, scroll comments, mute/unmute — all work because these are real browser windows. rmux automates none of them.
+4. Native interactions in every window: scroll, like, comment, scroll comments, mute/unmute — all work because these are real browser windows. Instagram starts every reel muted; rmux auto-unmutes **once per window** by clicking Instagram's own speaker control (its persistent mute preference only flips on that click), then stops — so a later manual mute is respected.
 
 ### 4.3 Switching focus
 
@@ -219,7 +219,7 @@ The button is the **only** thing rmux adds to the page, and it is built to never
 2. **Host element**: appended to `document.documentElement`, `position: fixed; left: 14px; bottom: 14px; z-index: 2147483647; pointer-events: none`. Since the host is click-transparent, it can never block clicks on reels or Instagram's own UI; only the button inside sets `pointer-events: auto`.
 3. **Non-focusable**: `tabindex="-1"` and `blur()` after click, so a stray Space/Enter can never re-trigger it.
 4. **SPA survival**: a watchdog interval (1s) re-appends the host if Instagram's SPA navigation orphans it, and toggles visibility based on the reel-page predicate (`/^\/reels?(\/|$)/` on `location.pathname` + instagram host). `evaluateOnNewDocument` re-installs the script on every navigation.
-5. **No touching their tree**: rmux never mutates Instagram's nodes, never monkeypatches their code, never reads the feed DOM. The only thing read is `location.href` at click time.
+5. **Minimal touching of their tree**: rmux never mutates Instagram's nodes, never monkeypatches their code, never reads the feed DOM. The only things read are `location.href` at click time and, for the one-shot auto-unmute, Instagram's own `[aria-label="Adjust volume"]` speaker control (which rmux clicks once per window — see §9 D14).
 6. **Channel back to Node**: `page.exposeFunction("__rmuxForkRequest", handler)` — the click handler calls `__rmuxForkRequest(location.href)`. (Obscure name to avoid collisions; persists across navigations automatically.)
 7. **Injection timing**: new windows open at `about:blank` first; rmux attaches, installs `evaluateOnNewDocument` + `exposeFunction` *before* navigating to the reel URL — no race where the page loads uninstrumented. Note: raw CDP `Page.addScriptToEvaluateOnNewDocument` silently no-ops unless `Page.enable` ran first (verified in `tools/initcheck.mjs`); rmux uses puppeteer's `evaluateOnNewDocument`, which works and persists across navigations.
 
@@ -227,19 +227,21 @@ The button is the **only** thing rmux adds to the page, and it is built to never
 
 ⚠️ **Trap:** `browser.createBrowserContext()` (the usual puppeteer way to get a new window) creates a **separate cookie jar** — each fork would be logged out. **Not acceptable.**
 
-**Solution:** all windows live in the **default browser context** (shared session). New windows are created via:
+**Solution:** all windows live in the **default browser context** (shared session) **and in Chrome app mode** (chromeless). New windows are created by:
 
-- **Primary:** CDP `Target.createTarget({url: "about:blank", newWindow: true})` on the browser-level session (full-chrome window, default context), then match the returned `targetId` to a puppeteer target.
-- **Fallback:** `window.open(url, "_blank", "width=400,height=800")` from the source page (same context; popup chrome may be minimal — acceptable as fallback).
+- **Primary:** spawn a short-lived second `chrome.exe --app=<data-url> --user-data-dir=<same>`. Chrome's process singleton forwards the command to the already-running browser, which opens a new chromeless app window in the default context; that window then appears on rmux's existing CDP connection, where rmux attaches, instruments, and navigates it.
+- **Why not CDP `Target.createTarget({newWindow:true})`:** it always makes a *regular* toolbar window, and Chrome exposes **no CDP command** to create an app window.
+- **Why a `data:` URL:** Chrome ignores `--app` for `about:blank` (you get a normal toolbar window), but a `data:` URL forces a real app window that stays chromeless after navigating on to https.
+- **Fallback:** `window.open(url, "_blank", ...)` from the source page (same context; popup chrome may be minimal — acceptable as fallback).
 
-Verified in the M0 spike (§14).
+Verified in `tools/appmodecheck.mjs`.
 
 ### 8.5 Lifecycle & close detection
 
 - `browser.on("targetdestroyed")` (and `targetcrashed`) — when a tracked page's target dies, the window is treated as closed: remove → reindex → retile (or maximize survivor / exit if last).
 - v1 assumption: the tracked page is the only tab in its window. (User-created extra tabs are out of scope — see §12.)
-- Fork flow: validate URL (instagram reel context) → create target at `about:blank` → map `windowId` → register (index N) → retile → instrument page → navigate to reel URL → auto-advance source → `sourcePage.bringToFront()`.
-- New windows come from CDP `Target.createTarget({newWindow: true})` in the default browser context (verified: a real full Chrome window, no opener, same cookies as every other window).
+- Fork flow: validate URL (instagram reel context) → spawn forwarded `chrome --app=<data-url>` helper → attach to the new app window, map `windowId` → register (index N) → retile → instrument page → navigate to reel URL → `sourcePage.bringToFront()`. (Fork opens are serialised, since a new window is identified as "the page that was not there before".)
+- New windows come from the forwarded `chrome --app` helper in the default browser context (verified: a real chromeless app window, no opener, same cookies as every other window).
 
 ---
 
@@ -249,7 +251,7 @@ Verified in the M0 spike (§14).
 |---|---|---|
 | D1 | Real browser windows (Option A), not local video capture | Faithful to the product: the forked reel is live Instagram — native scroll/like/comment all work; no fake replay. |
 | D2 | CDP for window movement | Exact handle mapping, runtime moves, cross-platform, no native deps/permissions. |
-| D3 | One browser context, new windows via `Target.createTarget(newWindow:true)` | Shared login/cookies across all windows; avoids the per-context cookie-jar trap. |
+| D3 | One browser context + app mode; new windows via a forwarded `chrome --app` helper | Shared login/cookies across all windows (avoids the per-context cookie-jar trap) **and** chromeless windows (no CDP API exists to make an app window, so a helper process asks the running browser for one). |
 | D4 | Forked reel replays from the start | Instagram has no public deep-link for timestamps; MVP simplicity. (Future: inject `video.currentTime` resume.) |
 | D5 | Shadow DOM + click-transparent host for the button | Complete UI isolation from Instagram, no click-stealing, survives SPA re-renders. |
 | D6 | Focus stays on source after fork (`bringToFront`) | The origin story: the user keeps watching window 0; the fork plays in the background. |
@@ -260,6 +262,7 @@ Verified in the M0 spike (§14).
 | D11 | Persistent profile at `./profile/` (revision of the original throwaway-profile call) | Field feedback: re-logging in every run is friction. The login survives restarts; `--fresh` wipes on demand; tests use scratch profiles. |
 | D12 | Mouse-only interactions in v1 | Everything is native OS/browser behavior; zero extra input machinery. |
 | D13 | No selectors against Instagram's DOM | Their class names are hashed and volatile; we only read `location.href` and a simple path regex. Nothing to break. |
+| D14 | One-shot auto-unmute by clicking Instagram's own speaker control | Instagram starts reels muted by design, and a raw `video.muted = false` does not update its persistent state (the next reel re-mutes). Only clicking its `[aria-label="Adjust volume"]` control flips that state, so the injected script does it once per window and then leaves it alone — sound by default, manual mute still respected. |
 | D14 | Chrome for Testing (downloaded via `npm run install-browser`) instead of the system browser | No Chrome was installed on the dev machine (only Brave/Edge); CfT is pinned, reproducible, and shield-free. `RMUX_CHROME` overrides the path. |
 
 ---
@@ -329,7 +332,7 @@ Principles: **minimum footprint, maximum nativeness.**
 
 | # | Milestone | Gate (acceptance) |
 
-**Status (2025-09-25):** M0–M5 complete — verified by unit tests, the lifecycle smoke test, and a real logged-in session (4 windows; layouts `0\|1` → `0\|1\|2` → `0\|1\|2/3`; close → reindex → retile → re-maximize; clean exit). **v1.1 revision:** persistent profile + auto-advance removed (user feedback). M6 (docs/hardening) in progress.
+**Status (2025-09-25):** M0–M5 complete — verified by unit tests, the lifecycle smoke test, and a real logged-in session (4 windows; layouts `0\|1` → `0\|1\|2` → `0\|1\|2/3`; close → reindex → retile → re-maximize; clean exit). **v1.1 revision:** persistent profile + auto-advance removed (user feedback). **v1.2 revision:** chromeless app-mode windows (`--app`) and one-shot auto-unmute — both verified live (window chrome 24px vs ~90px for a normal window; window 0 and a forked window both end up `muted:false` with no interaction). M6 (docs/hardening) in progress.
 |---|---|---|
 | **M0** | CDP window-control spike (from research doc §Next steps) | On this Windows machine: launch headful Chrome, open 2 pages, map both to `windowId`s, tile them, move them again at runtime, read back bounds. `Target.createTarget(newWindow:true)` verified to open a full-chrome window in the default context. |
 | **M1** | App skeleton | `npm start` → real Chrome window at `/reels/` (maximized), login works, Ctrl+C cleans up, no infobar, no orphan processes. |
@@ -367,6 +370,7 @@ E:/projects/rmux/
 │   └── lifecycle.smoke.js        # real-browser end-to-end (npm run smoke)
 ├── tools/
 │   ├── probe.mjs                 # M0 CDP window-control verification
+│   ├── appmodecheck.mjs          # app-mode window chromelessness / tiling / forwarding
 │   ├── initcheck.mjs             # init-script mechanism isolation
 │   ├── geomcheck.mjs             # set/getWindowBounds rounding characterisation
 │   ├── wdcheck.mjs               # navigator.webdriver flag checks
@@ -382,11 +386,11 @@ E:/projects/rmux/
 
 All original questions were answered by the M0 spike, the isolated checks in `tools/`, and the first live session:
 
-1. **`Target.createTarget({newWindow: true})`** → opens a real full Chrome window in the default browser context, no opener (verified). No need for the `window.open` fallback.
+1. **`Target.createTarget({newWindow: true})`** → opens a real full Chrome window in the default browser context, no opener (verified) — but it carries a toolbar. For chromeless windows rmux instead forwards `chrome --app=<data-url>` to the running browser (verified in `tools/appmodecheck.mjs`).
 2. **Synthetic `mouse.wheel`** → accepted in live use; if Instagram ever ignores a step, the user scrolls manually — the fork itself is unaffected.
 3. **Reel URLs** → live Instagram uses `instagram.com/reels/<shortcode>/` (plural) for the playing reel; the predicate accepts `/reels[/…]` and `/reel/<code>`.
 4. **Button aesthetics** → field-approved on the first session; label/pill/hover as designed.
-5. **Fork window appearance** → the window is created at `about:blank`, tiled, then navigated; no flash or focus-steal issues observed.
+5. **Fork window appearance** → the window is created at a `data:` URL (app mode), tiled, then navigated; no flash or focus-steal issues observed, and no toolbar ever appears.
 6. **Maximize→normal→geometry flicker** → no observable flicker in practice.
 
 Auto-advance was implemented and observed in the first live session, and then **removed by product decision** (v1.1): the feed jumping under the user was confusing. Fork is now purely additive — and rmux no longer sends any synthetic input.
@@ -398,11 +402,11 @@ Auto-advance was implemented and observed in the first live session, and then **
 First real logged-in session (fresh profile, Chrome for Testing 154). Window #0 forked → #1 → (from #1) #2 → (from #2) #3, then the user closed windows one by one:
 
 ```
-[rmux] fork: #0 → #1  https://www.instagram.com/reels/Ddmlb4pizsU/
+[rmux] fork: #0 → #1  https://www.instagram.com/reels/<shortcode-A>/
 [rmux] layout (2): 0 | 1
-[rmux] fork: #1 → #2  https://www.instagram.com/reels/Ddmlb4pizsU/
+[rmux] fork: #1 → #2  https://www.instagram.com/reels/<shortcode-A>/
 [rmux] layout (3): 0 | 1 | 2
-[rmux] fork: #2 → #3  https://www.instagram.com/reels/DczBhZeTj6P/
+[rmux] fork: #2 → #3  https://www.instagram.com/reels/<shortcode-B>/
 [rmux] layout (4): 0 | 1 | 2/3
 [rmux] close: #0 (3 windows left)
 [rmux] layout (3): 0 | 1 | 2

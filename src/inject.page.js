@@ -10,6 +10,11 @@
 //    re-trigger it
 //  - a watchdog re-anchors the host through SPA navigations and hides the
 //    button outside reel pages
+//
+// One deliberate exception to the contract: Instagram starts every reel muted
+// and only flips its persistent mute preference when its own speaker control is
+// clicked (setting video.muted does not stick — the next reel re-mutes). So,
+// once per document, rmux clicks that control to start playback with sound.
 (() => {
   'use strict';
 
@@ -25,6 +30,35 @@
 
   let host = null;
   let btn = null;
+
+  // Auto-unmute (see header). One-shot per document: we nudge IG's own control
+  // until it reports playback, then stop, so a later manual mute is respected.
+  const AUTO_UNMUTE = true;
+  const AUDIO_ATTEMPTS = 3;
+  let audioAttempts = 0;
+
+  function nudgeAudio() {
+    if (!AUTO_UNMUTE || audioAttempts >= AUDIO_ATTEMPTS || !isReelPage()) return;
+    try {
+      const playing = [...document.querySelectorAll('video')].find((v) => !v.paused && v.readyState > 0);
+      if (!playing) return; // reel not playing yet — retry on the next tick
+      // The live control is the on-screen [aria-label="Adjust volume"] element
+      // (the feed keeps mounted, off-screen copies for other reels).
+      const control = [...document.querySelectorAll('[aria-label="Adjust volume"]')].find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.top >= -20 && r.bottom <= innerHeight + 20;
+      });
+      if (!control) return;
+      const icon = control.querySelector('svg');
+      const label = icon ? String(icon.getAttribute('aria-label') || '') : '';
+      if (/muted/i.test(label)) {
+        control.click(); // flips Instagram's own state (and thus every next reel)
+        audioAttempts += 1;
+      } else {
+        audioAttempts = AUDIO_ATTEMPTS; // already playing with sound — done
+      }
+    } catch (e) { /* ignore */ }
+  }
 
   const isReelPage = () => {
     try {
@@ -127,6 +161,7 @@
       const parent = document.documentElement || document.body;
       if (parent && !host.isConnected) parent.appendChild(host);
       if (host) host.style.display = isReelPage() ? 'block' : 'none';
+      nudgeAudio();
     } catch (e) { /* ignore */ }
   }
 

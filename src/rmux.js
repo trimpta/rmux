@@ -3,8 +3,10 @@
 import puppeteer from 'puppeteer-core';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 
 import {
+  APP_WINDOW_URL,
   CHROME_ARGS,
   DEFAULT_TIMEOUT_MS,
   FORK_BRIDGE,
@@ -73,6 +75,7 @@ export class RmuxApp {
     this._instrumented = new WeakSet();
     this._injectionSource = buildInjectionSource();
     this._loginHinted = false;
+    this._openWindowChain = Promise.resolve();
   }
 
   log(...args) {
@@ -110,7 +113,8 @@ export class RmuxApp {
         userDataDir: this.profileDir,
         defaultViewport: null,
         ignoreDefaultArgs: ['--enable-automation'],
-        args: CHROME_ARGS,
+        // --app opens window 0 chromeless (no tab strip / omnibox), like a PWA.
+        args: [...CHROME_ARGS, `--app=${APP_WINDOW_URL}`],
       });
     } catch (err) {
       const hint = existsSync(join(this.profileDir, 'SingletonLock'))
@@ -231,32 +235,63 @@ export class RmuxApp {
 
   // ---------------------------------------------------------------- forking
 
-  /** Opens a new top-level window (same browser context => shared login). */
-  async _openWindow() {
-    const { targetId } = await this.browserSession.send('Target.createTarget', {
-      url: 'about:blank',
-      newWindow: true,
-    });
+  /**
+   * Opens a new top-level *app* window (chromeless) in the SAME browser
+   * process — and therefore the same context, so the login is shared.
+   *
+   * Chrome exposes no CDP command for an app-mode window, and
+   * Target.createTarget always makes a regular toolbar window. Instead we run a
+   * second chrome.exe pointed at the same --user-data-dir: Chrome's process
+   * singleton forwards the --app URL to the running browser, and the new window
+   * appears on our existing CDP connection (verified in tools/appmodecheck.mjs).
+   *
+   * Because a new window is identified by "a page that was not there before",
+   * concurrent opens must not overlap — they are serialised.
+   */
+  _openWindow() {
+    const run = this._openWindowChain.then(() => this._openWindowOnce());
+    this._openWindowChain = run.catch(() => {});
+    return run;
+  }
 
-    let target = this.browser.targets().find((t) => targetIdOf(t) === targetId);
-    if (!target) {
-      target = await this.browser.waitForTarget((t) => targetIdOf(t) === targetId, { timeout: 5000 });
-    }
+  async _openWindowOnce() {
+    const before = new Set(await this.browser.pages());
+    this._spawnAppWindow();
 
-    let page = await target.page();
-    if (!page) {
-      await sleep(200);
-      page = await target.page();
+    const deadline = Date.now() + 15_000;
+    let page = null;
+    while (!page && Date.now() < deadline) {
+      page = (await this.browser.pages()).find((p) => !before.has(p));
+      if (!page) await sleep(150);
     }
-    if (!page) throw new Error('could not attach to the new window');
+    if (!page) throw new Error('the forked window never appeared');
 
     const win = await this._registerPage(page);
     return { win, page };
   }
 
   /**
-   * The fork pipeline (prd.md §8.5): create → map → register → retile →
-   * instrument → navigate → advance source → refocus source.
+   * Fires the short-lived helper process that asks the running browser for a new
+   * app window. It exits immediately after forwarding; the window it produces is
+   * our real target. No --remote-debugging-port: it must NOT start its own browser.
+   */
+  _spawnAppWindow() {
+    const child = spawn(
+      resolveChromeExecutable(),
+      [
+        `--app=${APP_WINDOW_URL}`,
+        `--user-data-dir=${this.profileDir}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+      ],
+      { detached: true, stdio: 'ignore' },
+    );
+    child.unref();
+  }
+
+  /**
+   * The fork pipeline (prd.md §8.5): open → map → register → retile →
+   * instrument → navigate → refocus source.
    */
   async _handleForkRequest(sourcePage, href) {
     if (this._shutdown) return 'ignored';
@@ -346,8 +381,12 @@ export class RmuxApp {
     this.log(`shutting down (${reason})`);
 
     try {
-      const closed = this.browser?.close().catch(() => {});
-      await Promise.race([closed, sleep(5000)]);
+      // Chrome normally exits on its own when the last window closes; talking to
+      // an already-dead connection would otherwise stall for the full grace
+      // period, which reads as "the process is still running".
+      if (this.browser?.connected) {
+        await Promise.race([this.browser.close().catch(() => {}), sleep(1500)]);
+      }
       this.browser?.process()?.kill();
     } catch {
       /* ignore */

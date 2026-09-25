@@ -4,3 +4,4 @@ profile/
 logs/
 *.log
 .DS_Store
+prompt-history.md

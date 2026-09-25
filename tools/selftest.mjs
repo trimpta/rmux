@@ -17,6 +17,13 @@ console.log(
   '[selftest] navigator.webdriver:',
   await w0.page.evaluate(() => navigator.webdriver).catch((e) => `err: ${e.message}`),
 );
+console.log(
+  '[selftest] browser chrome above page (px):',
+  await w0.page
+    .evaluate(() => Math.round(window.outerHeight - window.innerHeight))
+    .catch((e) => `err: ${e.message}`),
+  '(chromeless app window should be ~35-40, a normal toolbar window ~90+)',
+);
 
 await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 console.log('[selftest] final url:', w0.page.url());

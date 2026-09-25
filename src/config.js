@@ -20,14 +20,25 @@ export const LOGIN_PATH_RE = /^\/(accounts|challenge)(\/|$)/;
 export const MAX_COLUMNS = 3;
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
+// Chrome "app mode" (chromeless: no tab strip, no omnibox) needs a real
+// navigation URL — about:blank is ignored and yields a normal toolbar window,
+// but a data: URL forces an app window, and it stays chromeless after we
+// navigate on to https. Every rmux window (first and forked) starts here.
+// Verified in tools/appmodecheck.mjs.
+export const APP_WINDOW_URL = 'data:text/html,<title>rmux</title>';
+
 // Verified flags (see tools/probe.mjs + tools/initcheck.mjs):
 //  - --enable-automation is stripped via ignoreDefaultArgs
 //  - --disable-blink-features=AutomationControlled keeps navigator.webdriver false
+//  - --autoplay-policy lets a freshly-forked window (no user gesture) play
+//    audible media; with it, the injected auto-unmute cannot be paused by the
+//    autoplay policy.
 export const CHROME_ARGS = [
   '--no-first-run',
   '--no-default-browser-check',
   '--hide-crash-restore-bubble',
   '--disable-blink-features=AutomationControlled',
+  '--autoplay-policy=no-user-gesture-required',
 ];
 
 const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url));
