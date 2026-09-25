@@ -68,6 +68,7 @@ npm run smoke    # full lifecycle against a local page: fork via the real bridge
 | Tool | Purpose |
 |---|---|
 | `npm run probe` | Verifies every CDP window-management assumption on this machine |
+| `npm run demo` | Scripted demo against real Instagram: watch → scroll → fork → scroll → fork (nested) → close/reindex, narrated step by step (`--fast` to hurry) |
 | `node tools/appmodecheck.mjs` | Confirms app-mode windows are chromeless, tileable, and openable via a forwarded `chrome --app` process |
 | `node tools/autoplaycheck.mjs` | Checks whether audible autoplay is allowed (autoplay-policy flag) |
 | `node tools/initcheck.mjs` | Which init-script mechanism actually runs on navigation |

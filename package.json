@@ -9,6 +9,7 @@
     "start": "node src/main.js",
     "test": "node --test test/tiler.test.js test/inject.test.js",
     "smoke": "node test/lifecycle.smoke.js",
+    "demo": "node tools/demo.mjs",
     "probe": "node tools/probe.mjs",
     "install-browser": "npx @puppeteer/browsers install chrome@stable --path ./browsers"
   },
